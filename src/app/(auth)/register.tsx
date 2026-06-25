@@ -14,6 +14,7 @@ import { Link } from 'expo-router';
 
 import { useAuth } from '../../store/auth';
 import { COLORS } from '../../constants/colors';
+import { DiaryLogo } from '../../components/DiaryLogo';
 
 function getErrorMessage(code: string): string {
   switch (code) {
@@ -63,7 +64,7 @@ export default function RegisterScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
-            <Text style={styles.title}>日記</Text>
+            <DiaryLogo />
             <Text style={styles.subtitle}>新規登録</Text>
           </View>
 
@@ -135,18 +136,12 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 40,
     alignItems: 'center',
-  },
-  title: {
-    fontSize: 40,
-    fontWeight: '700',
-    color: COLORS.INK,
-    letterSpacing: 6,
+    gap: 14,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 13,
     color: COLORS.SUB,
-    marginTop: 8,
-    letterSpacing: 2,
+    letterSpacing: 3,
   },
   form: {
     gap: 12,
