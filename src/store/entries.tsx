@@ -1,94 +1,179 @@
 import {
   createContext,
   useContext,
-  useMemo,
   useState,
+  useCallback,
   type ReactNode,
 } from 'react';
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  startAfter,
+  getDocs,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  Timestamp,
+  type QueryDocumentSnapshot,
+  type DocumentData,
+} from 'firebase/firestore';
 
-export type Entry = {
-  id: string;
-  date: Date;
-  mood: string;
-  title: string;
-  body: string;
-};
-
-const INITIAL_ENTRIES: Entry[] = [
-  {
-    id: 'seed-1',
-    date: new Date(2026, 4, 29),
-    mood: '☀️',
-    title: '鴨川沿いを散歩した',
-    body: '夕方から鴨川沿いを歩いた。風がぬるくて、もう初夏という感じ。等間隔カップルも健在で、見ているだけで少し笑ってしまった。',
-  },
-  {
-    id: 'seed-2',
-    date: new Date(2026, 4, 27),
-    mood: '☕️',
-    title: '新しい喫茶店',
-    body: '河原町二条の小さな喫茶店に入った。深煎りの豆と、店主の選曲がとても良かった。次は本を持って行きたい。',
-  },
-  {
-    id: 'seed-3',
-    date: new Date(2026, 4, 24),
-    mood: '🌧',
-    title: '雨の日の作業',
-    body: '一日中雨。家でコードを書いて過ごす。集中はできたけれど、夜になって少しだけ気分が落ちた。明日は外に出よう。',
-  },
-  {
-    id: 'seed-4',
-    date: new Date(2026, 4, 21),
-    mood: '🍜',
-    title: '友人と夕食',
-    body: '久しぶりに学生時代の友人とラーメン。お互い違う方向に進んだけれど、話しているとあの頃の距離感に戻る。',
-  },
-  {
-    id: 'seed-5',
-    date: new Date(2026, 4, 18),
-    mood: '📚',
-    title: '読了',
-    body: '積んでいた本をやっと読み終えた。後半の展開がとても良くて、読後しばらく動けなかった。',
-  },
-];
-
-type EntryInput = {
-  mood: string;
-  title: string;
-  body: string;
-};
+import { db } from '../lib/firebase';
+import { useAuth } from './auth';
+import { PAGE_SIZE } from '../constants/config';
+import type { Entry, EntryInput } from '../types/entry';
 
 type EntriesContextValue = {
   entries: Entry[];
-  addEntry: (input: EntryInput) => void;
+  hasMore: boolean;
+  isLoading: boolean;
+  error: string | null;
+  loadMore: () => Promise<void>;
+  reload: () => Promise<void>;
+  addEntry: (input: EntryInput) => Promise<void>;
+  updateEntry: (id: string, input: EntryInput) => Promise<void>;
+  deleteEntry: (id: string) => Promise<void>;
 };
 
 const EntriesContext = createContext<EntriesContextValue | null>(null);
 
-export function EntriesProvider({ children }: { children: ReactNode }) {
-  const [entries, setEntries] = useState<Entry[]>(INITIAL_ENTRIES);
+function toDate(value: unknown): Date {
+  if (value instanceof Timestamp) return value.toDate();
+  if (value instanceof Date) return value;
+  return new Date();
+}
 
-  const value = useMemo<EntriesContextValue>(
-    () => ({
-      entries,
-      addEntry: ({ mood, title, body }) => {
-        setEntries((prev) => [
-          {
-            id: `entry-${Date.now()}`,
-            date: new Date(),
-            mood,
-            title,
-            body,
-          },
-          ...prev,
-        ]);
-      },
-    }),
-    [entries],
-  );
+function docToEntry(docSnap: QueryDocumentSnapshot<DocumentData>): Entry {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    userId: data.userId as string,
+    icon: data.icon as string,
+    title: data.title as string,
+    body: data.body as string,
+    date: toDate(data.date),
+    imageUrl: (data.imageUrl as string | null) ?? null,
+    createdAt: toDate(data.createdAt),
+    updatedAt: toDate(data.updatedAt),
+  };
+}
+
+export function EntriesProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastDoc, setLastDoc] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+
+  const getEntriesRef = useCallback(() => {
+    if (!user) throw new Error('Not authenticated');
+    return collection(db, 'users', user.uid, 'entries');
+  }, [user]);
+
+  const reload = useCallback(async () => {
+    if (!user) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const ref = getEntriesRef();
+      const q = query(ref, orderBy('date', 'desc'), limit(PAGE_SIZE));
+      const snapshot = await getDocs(q);
+      const fetched = snapshot.docs.map(docToEntry);
+      setEntries(fetched);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1] ?? null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (err) {
+      setError('データの読み込みに失敗しました');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, getEntriesRef]);
+
+  const loadMore = useCallback(async () => {
+    if (!user || isLoading || !hasMore) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const ref = getEntriesRef();
+      const q = lastDoc
+        ? query(ref, orderBy('date', 'desc'), startAfter(lastDoc), limit(PAGE_SIZE))
+        : query(ref, orderBy('date', 'desc'), limit(PAGE_SIZE));
+      const snapshot = await getDocs(q);
+      const fetched = snapshot.docs.map(docToEntry);
+      setEntries((prev) => [...prev, ...fetched]);
+      setLastDoc(snapshot.docs[snapshot.docs.length - 1] ?? null);
+      setHasMore(snapshot.docs.length === PAGE_SIZE);
+    } catch (err) {
+      setError('データの読み込みに失敗しました');
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user, isLoading, hasMore, lastDoc, getEntriesRef]);
+
+  const addEntry = useCallback(async (input: EntryInput) => {
+    if (!user) throw new Error('Not authenticated');
+    const ref = getEntriesRef();
+    await addDoc(ref, {
+      userId: user.uid,
+      icon: input.icon,
+      title: input.title,
+      body: input.body,
+      date: input.date,
+      imageUrl: input.imageUrl ?? null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    await reload();
+  }, [user, getEntriesRef, reload]);
+
+  const updateEntry = useCallback(async (id: string, input: EntryInput) => {
+    if (!user) throw new Error('Not authenticated');
+    const ref = doc(db, 'users', user.uid, 'entries', id);
+    await updateDoc(ref, {
+      icon: input.icon,
+      title: input.title,
+      body: input.body,
+      date: input.date,
+      imageUrl: input.imageUrl ?? null,
+      updatedAt: serverTimestamp(),
+    });
+    setEntries((prev) =>
+      prev.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              icon: input.icon,
+              title: input.title,
+              body: input.body,
+              date: input.date,
+              imageUrl: input.imageUrl ?? null,
+              updatedAt: new Date(),
+            }
+          : e,
+      ),
+    );
+  }, [user]);
+
+  const deleteEntry = useCallback(async (id: string) => {
+    if (!user) throw new Error('Not authenticated');
+    const ref = doc(db, 'users', user.uid, 'entries', id);
+    await deleteDoc(ref);
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+  }, [user]);
 
   return (
-    <EntriesContext.Provider value={value}>{children}</EntriesContext.Provider>
+    <EntriesContext.Provider
+      value={{ entries, hasMore, isLoading, error, loadMore, reload, addEntry, updateEntry, deleteEntry }}
+    >
+      {children}
+    </EntriesContext.Provider>
   );
 }
 

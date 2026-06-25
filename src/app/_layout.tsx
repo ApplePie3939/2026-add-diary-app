@@ -1,14 +1,14 @@
 import { Stack } from 'expo-router';
 
-import { EntriesProvider } from '../store/entries';
+import { AuthProvider } from '../store/auth';
 
 export default function RootLayout() {
   return (
-    <EntriesProvider>
+    <AuthProvider>
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="new" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(app)" />
       </Stack>
-    </EntriesProvider>
+    </AuthProvider>
   );
 }
